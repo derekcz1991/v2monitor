@@ -4,6 +4,8 @@ import android.os.Environment;
 import android.os.Handler;
 import android.support.v7.app.AppCompatActivity;
 import android.os.Bundle;
+import android.text.method.ScrollingMovementMethod;
+import android.util.Log;
 import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
@@ -55,6 +57,7 @@ public class MainActivity extends AppCompatActivity implements SingleTask.Callba
         clearBtn = findViewById(R.id.clear_btn);
         input = findViewById(R.id.input);
         logText = findViewById(R.id.logText);
+        logText.setMovementMethod(new ScrollingMovementMethod());
 
         client = new OkHttpClient.Builder()
             .connectTimeout(60, TimeUnit.SECONDS)
@@ -105,7 +108,9 @@ public class MainActivity extends AppCompatActivity implements SingleTask.Callba
                     public void run() {
                         while (true) {
                             try {
+                                printThread("take");
                                 queue.take().queryList();
+                                Thread.sleep(100);
                             } catch (InterruptedException e) {
                                 Logger.e(TAG, "queue error ==>> ", e);
                             }
@@ -125,21 +130,25 @@ public class MainActivity extends AppCompatActivity implements SingleTask.Callba
 
     @Override
     public void onReady(SingleTask singleTask) {
+        printThread("onReady");
         queue.offer(singleTask);
     }
 
     @Override
     public void onDoneQuery(final SingleTask singleTask, long lastQueryTime) {
         if (lastQueryTime == 0) {
+            printThread("onDoneQuery 1");
             queue.offer(singleTask);
         } else {
-            long delta = 5000 - System.currentTimeMillis() - lastQueryTime;
+            long delta = 5000 - (System.currentTimeMillis() - lastQueryTime);
             if (delta <= 0) {
+                printThread("onDoneQuery 2");
                 queue.offer(singleTask);
             } else {
                 handler.postDelayed(new Runnable() {
                     @Override
                     public void run() {
+                        printThread("onDoneQuery 3");
                         queue.offer(singleTask);
                     }
                 }, delta);
@@ -149,8 +158,7 @@ public class MainActivity extends AppCompatActivity implements SingleTask.Callba
     }
 
     @Override
-    public void onFindBooking(String result) {
-        List<BookInfo> list = DealStrSubUtils.getTimeInfoList(result, "javascript:booking(.*?);");
+    public void onFindBooking(List<BookInfo> list) {
         for (SingleTask task : tasks) {
             task.commit(list.get(0));
         }
@@ -158,6 +166,10 @@ public class MainActivity extends AppCompatActivity implements SingleTask.Callba
 
     @Override
     public void onBooking(String id, BookingResult bookingResult) {
-        Logger.d(TAG, "Booking result ==>> " + "[" + id + "]: " + bookingResult.toString());
+        //Logger.d(TAG, "Booking result ==>> " + "[" + id + "]: " + bookingResult.toString());
+    }
+
+    private void printThread(String method) {
+        Log.d("MyThread", method + ": " + Thread.currentThread().getName());
     }
 }

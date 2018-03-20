@@ -10,14 +10,15 @@ import com.alibaba.fastjson.JSONObject;
 import com.derek.v2monitor.model.BookInfo;
 import com.derek.v2monitor.model.BookingResult;
 import com.derek.v2monitor.model.UserInfo;
+import com.derek.v2monitor.utils.DealStrSubUtils;
 import com.googlecode.tesseract.android.TessBaseAPI;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.List;
 
 import okhttp3.Call;
-import okhttp3.Callback;
 import okhttp3.MediaType;
 import okhttp3.MultipartBody;
 import okhttp3.OkHttpClient;
@@ -50,7 +51,7 @@ public class SingleTask implements okhttp3.Callback {
     private TessBaseAPI tessBaseAPI;
     private Callback callback;
 
-    //private Handler handler;
+    private int step;
 
     private String id;
     private String cookie;
@@ -66,12 +67,13 @@ public class SingleTask implements okhttp3.Callback {
     private Call postInoCall;
     private Call queryListCall;
 
+
     interface Callback {
         void onReady(SingleTask singleTask);
 
         void onDoneQuery(SingleTask singleTask, long lastQueryTime);
 
-        void onFindBooking(String result);
+        void onFindBooking(List<BookInfo> list);
 
         void onBooking(String id, BookingResult bookingResult);
     }
@@ -107,12 +109,16 @@ public class SingleTask implements okhttp3.Callback {
             case 5:
                 callback.onReady(this);
                 break;
+            case 6:
+                realCommit(bookInfo, false);
+                break;
         }
     }
 
     // step 1: 获取cookie
     private void getCookie() {
-        Logger.d(TAG, getLogMsg("Step 1: 获取cookie ==>> "));
+        step = 1;
+        Logger.d(TAG, getLogMsg("Step 1: 获取cookie"));
         Request request = new Request.Builder()
             .url(URL_GET_TYPE)
             .addHeader("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8")
@@ -124,7 +130,8 @@ public class SingleTask implements okhttp3.Callback {
 
     // step 2: 查询信息
     private void queryInfo() {
-        Logger.d(TAG, getLogMsg("Step 2: 查询信息 ==>> "));
+        step = 2;
+        Logger.d(TAG, getLogMsg("Step 2: 查询信息"));
         RequestBody body = RequestBody.create(FORM, "sblsh=" + id);
         Request request = new Request.Builder()
             .url(URL_SEARCH)
@@ -140,7 +147,8 @@ public class SingleTask implements okhttp3.Callback {
 
     // step 3: 获取验证码
     private void getImageCode() {
-        Logger.d(TAG, getLogMsg("Step 3: 获取验证码 ==>> "));
+        step = 3;
+        Logger.d(TAG, getLogMsg("Step 3: 获取验证码"));
         Request request = new Request.Builder()
             .url(URL_GET_CODE)
             .addHeader("Accept", " image/webp,image/apng,image/*,*/*;q=0.8")
@@ -153,7 +161,8 @@ public class SingleTask implements okhttp3.Callback {
 
     // step 4: 提交信息
     private void postInfo() {
-        Logger.d(TAG, getLogMsg("Step 4: 提交信息 ==>> "));
+        step = 4;
+        Logger.d(TAG, getLogMsg("Step 4: 提交信息"));
         StringBuilder sb = new StringBuilder();
         if (TextUtils.isEmpty(userInfo.getSfzmhm())) {
             return;
@@ -185,8 +194,9 @@ public class SingleTask implements okhttp3.Callback {
 
     // step 5: 搜索list
     void queryList() {
+        step = 5;
         lastQueryTime = System.currentTimeMillis();
-        Logger.d(TAG, getLogMsg("Step 5: 搜索BookingList ==>> "));
+        Logger.d(TAG, getLogMsg("Step 5: 搜索BookingList"));
         Request request = new Request.Builder()
             .url(URL_BOOKING_LIST)
             .addHeader("Cookie", cookie)
@@ -199,6 +209,14 @@ public class SingleTask implements okhttp3.Callback {
 
     // step 6: 获取图片验证码
     void commit(BookInfo bookInfo) {
+        realCommit(bookInfo, true);
+    }
+
+    private void realCommit(BookInfo bookInfo, boolean needCheck) {
+        if (needCheck && step >= 6) {
+            return;
+        }
+        step = 6;
         if (cookieCall != null && !cookieCall.isCanceled()) {
             cookieCall.cancel();
         }
@@ -215,7 +233,7 @@ public class SingleTask implements okhttp3.Callback {
             queryListCall.cancel();
         }
 
-        Logger.d(TAG, getLogMsg("Step 6: 获取图片验证码 ==>> "));
+        Logger.d(TAG, getLogMsg("Step 6: 获取图片验证码"));
         this.bookInfo = bookInfo;
         Request request = new Request.Builder()
             .url(URL_GET_LAST_CODE)
@@ -241,7 +259,10 @@ public class SingleTask implements okhttp3.Callback {
         });
     }
 
+    // step 7: 识别图片验证码
     private void recognizeCode(byte[] file) {
+        step = 7;
+        Logger.d(TAG, getLogMsg("Step 7: 识别图片验证码"));
         MultipartBody.Builder requestBody = new MultipartBody.Builder().setType(MultipartBody.FORM);
         RequestBody body = RequestBody.create(MediaType.parse("image/*"), file);
         requestBody.addFormDataPart("upload", "xxx.jpg", body);
@@ -261,24 +282,29 @@ public class SingleTask implements okhttp3.Callback {
 
             @Override
             public void onFailure(Call call, IOException e) {
-                Logger.e(TAG, getLogMsg("提交-识别验证码 ==>> "), e);
+                Logger.e(TAG, getLogMsg("识别图片验证码失败 ==>> "), e);
                 callback.onDoneQuery(SingleTask.this, 0);
             }
 
             @Override
             public void onResponse(Call call, Response response) throws IOException {
                 String result = response.body().string();
-                Logger.d(TAG, getLogMsg("recognizeCode ==>> " + result));
+                Logger.d(TAG, getLogMsg("识别图片验证码 ==>> " + result));
                 JSONObject jsonObject = JSONObject.parseObject(result);
                 if ("true".equals(jsonObject.getString("result"))) {
                     final String code = jsonObject.getJSONObject("data").getString("val").toLowerCase();
                     finalCommit(code);
+                } else {
+                    callback.onDoneQuery(SingleTask.this, 0);
                 }
             }
         });
     }
 
+    // step 8:
     private void finalCommit(String code) {
+        step = 8;
+        Logger.d(TAG, getLogMsg("Step 8: 提交预约"));
         final RequestBody body = RequestBody.create(FORM,
             "peid=" + bookInfo.getId()
                 + "&bookingDate=" + bookInfo.getDate()
@@ -301,7 +327,14 @@ public class SingleTask implements okhttp3.Callback {
             @Override
             public void onResponse(Call call, Response response) throws IOException {
                 BookingResult bookingResult = JSON.parseObject(response.body().string(), BookingResult.class);
-                callback.onBooking(id, bookingResult);
+                Logger.d(TAG, getLogMsg("预约结果 ==>> " + (bookingResult == null ? "null" : bookingResult.toString())));
+                if (bookingResult == null || bookingResult.getDetail().contains("验证码不正确！")) {
+                    handleStep(6);
+                } else if ("success".equals(bookingResult.getType())) {
+                    callback.onBooking(id, bookingResult);
+                } else {
+                    callback.onDoneQuery(SingleTask.this, 0);
+                }
             }
         });
     }
@@ -312,17 +345,14 @@ public class SingleTask implements okhttp3.Callback {
             switch (((Tag) call.request().tag()).step) {
                 case 1:
                     Logger.e(TAG, getLogMsg("get cookie ==>> "), e);
-                    //handler.sendEmptyMessage(1);
                     handleStep(1);
                     break;
                 case 2:
                     Logger.e(TAG, getLogMsg("查询流水号信息 ==>> "), e);
-                    //handler.sendEmptyMessage(2);
                     handleStep(2);
                     break;
                 case 3:
                     Logger.e(TAG, getLogMsg("获取验证码 ==>> "), e);
-                    //handler.sendEmptyMessage(3);
                     handleStep(3);
                     break;
                 case 4:
@@ -344,7 +374,6 @@ public class SingleTask implements okhttp3.Callback {
                 case 1:
                     cookie = response.header("Set-Cookie").split(";")[0];
                     Logger.d(TAG, getLogMsg("cookie ==>> " + cookie));
-                    //handler.sendEmptyMessage(2);
                     handleStep(2);
                     break;
                 case 2: {
@@ -352,7 +381,6 @@ public class SingleTask implements okhttp3.Callback {
                     userInfo = JSON.parseObject(result, UserInfo.class);
                     Logger.d(TAG, getLogMsg("流水号信息 ==>> " + userInfo));
                     if (userInfo.isValidate()) {
-                        //handler.sendEmptyMessage(3);
                         handleStep(3);
                     } else {
                         handleStep(2);
@@ -384,7 +412,13 @@ public class SingleTask implements okhttp3.Callback {
                     if (result.contains("请不要进行非法操作")) {
                         handleStep(1);
                     } else if (result.contains("<span>预约</span>")) {
-                        callback.onFindBooking(result);
+                        List<BookInfo> list = DealStrSubUtils.getTimeInfoList(result, "javascript:booking(.*?);");
+                        Logger.d(TAG, getLogMsg("发现可预约 ==>> ") + list.size());
+                        if (list.size() > 0) {
+                            callback.onFindBooking(list);
+                        } else {
+                            callback.onDoneQuery(this, lastQueryTime);
+                        }
                         return;
                     } else {
                         callback.onDoneQuery(this, lastQueryTime);
