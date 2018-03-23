@@ -1,5 +1,6 @@
 package com.derek.v2monitor;
 
+import android.app.Activity;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.text.TextUtils;
@@ -32,6 +33,7 @@ import okhttp3.Response;
 
 public class SingleTask implements okhttp3.Callback {
     private String TAG = this.getClass().getSimpleName();
+    private final String DEFAULT_LANGUAGE = "eng";
 
     private final MediaType FORM = MediaType.parse("application/x-www-form-urlencoded; charset=utf-8");
     private final String URL_GET_TYPE = "http://183.6.175.51:8000/xb/xbywyy/selectType.jsp";
@@ -46,6 +48,7 @@ public class SingleTask implements okhttp3.Callback {
     private String userPwd = "2015Wgzl@";
     private String userToken = "derekcz";
 
+    private Activity activity;
     private OkHttpClient client;
     private OkHttpClient commitClient;
     private TessBaseAPI tessBaseAPI;
@@ -78,14 +81,16 @@ public class SingleTask implements okhttp3.Callback {
         void onBooking(String id, BookingResult bookingResult);
     }
 
-    public SingleTask(OkHttpClient client, OkHttpClient commitClient, TessBaseAPI tessBaseAPI, String id, Callback callback) {
+    public SingleTask(Activity activity, OkHttpClient client, OkHttpClient commitClient, String dataPath, String id, Callback callback) {
+        this.activity = activity;
         this.client = client;
         this.commitClient = commitClient;
-        this.tessBaseAPI = tessBaseAPI;
+        //this.tessBaseAPI = tessBaseAPI;
         this.id = id;
         this.callback = callback;
 
-        handleStep(1);
+        this.tessBaseAPI = new TessBaseAPI();
+        tessBaseAPI.init(dataPath, DEFAULT_LANGUAGE);
     }
 
     public void execute() {
@@ -345,6 +350,11 @@ public class SingleTask implements okhttp3.Callback {
             switch (((Tag) call.request().tag()).step) {
                 case 1:
                     Logger.e(TAG, getLogMsg("get cookie ==>> "), e);
+                    try {
+                        Thread.sleep(1000);
+                    } catch (InterruptedException e1) {
+                        e1.printStackTrace();
+                    }
                     handleStep(1);
                     break;
                 case 2:
@@ -368,7 +378,7 @@ public class SingleTask implements okhttp3.Callback {
     }
 
     @Override
-    public void onResponse(Call call, Response response) throws IOException {
+    public void onResponse(Call call, final Response response) throws IOException {
         if (isMyRequest(call.request().tag())) {
             switch (((Tag) call.request().tag()).step) {
                 case 1:
@@ -388,9 +398,10 @@ public class SingleTask implements okhttp3.Callback {
                     break;
                 }
                 case 3:
+                    Logger.d(TAG, getLogMsg("获取验证码"));
                     Bitmap bitmap = BitmapFactory.decodeStream(response.body().byteStream());
                     tessBaseAPI.setImage(bitmap);
-                    imageCode = tessBaseAPI.getUTF8Text();
+                    imageCode = tessBaseAPI.getUTF8Text().replace(" ", "");
                     if (!TextUtils.isEmpty(imageCode) && imageCode.length() == 4) {
                         handleStep(4);
                     } else {
@@ -432,7 +443,7 @@ public class SingleTask implements okhttp3.Callback {
         return tag instanceof Tag && ((Tag) tag).hashCode == hashCode();
     }
 
-    private String getLogMsg(String msg) {
+    String getLogMsg(String msg) {
         return "[" + id + "]: " + msg;
     }
 

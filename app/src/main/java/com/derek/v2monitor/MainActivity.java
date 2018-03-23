@@ -1,9 +1,12 @@
 package com.derek.v2monitor;
 
+import android.annotation.SuppressLint;
+import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
+import android.os.Looper;
+import android.os.Message;
 import android.support.v7.app.AppCompatActivity;
-import android.os.Bundle;
 import android.text.method.ScrollingMovementMethod;
 import android.util.Log;
 import android.view.View;
@@ -13,14 +16,13 @@ import android.widget.TextView;
 
 import com.derek.v2monitor.model.BookInfo;
 import com.derek.v2monitor.model.BookingResult;
-import com.derek.v2monitor.utils.DealStrSubUtils;
 import com.derek.v2monitor.utils.FileUtils;
 import com.googlecode.tesseract.android.TessBaseAPI;
 
 import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.TimeUnit;
 
 import okhttp3.OkHttpClient;
@@ -43,10 +45,13 @@ public class MainActivity extends AppCompatActivity implements SingleTask.Callba
     private EditText input;
     private TextView logText;
 
-    private ArrayBlockingQueue<SingleTask> queue;
+    private ConcurrentLinkedQueue<SingleTask> taskQueue;
     private ArrayList<SingleTask> tasks;
 
-    private Handler handler = new Handler();
+    private Handler looperHandler;
+    private long lastPollTime;
+    private long timeDelta;
+    //private Handler handler = new Handler();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -88,7 +93,8 @@ public class MainActivity extends AppCompatActivity implements SingleTask.Callba
             }
         });
 
-        queue = new ArrayBlockingQueue<>(20);
+        //queue = new ArrayBlockingQueue<>(20);
+        taskQueue = new ConcurrentLinkedQueue<>();
         tasks = new ArrayList<>();
 
         startBtn.setOnClickListener(new View.OnClickListener() {
@@ -99,24 +105,17 @@ public class MainActivity extends AppCompatActivity implements SingleTask.Callba
 
                 String[] idArray = input.getText().toString().split("\n");
                 for (String id : idArray) {
-                    SingleTask singleTask = new SingleTask(client, commitClient, tessBaseAPI, id, MainActivity.this);
+                    SingleTask singleTask = new SingleTask(MainActivity.this, client, commitClient, DATA_PATH, id, MainActivity.this);
                     tasks.add(singleTask);
                 }
 
-                new Thread(new Runnable() {
-                    @Override
-                    public void run() {
-                        while (true) {
-                            try {
-                                printThread("take");
-                                queue.take().queryList();
-                                Thread.sleep(100);
-                            } catch (InterruptedException e) {
-                                Logger.e(TAG, "queue error ==>> ", e);
-                            }
-                        }
-                    }
-                }).start();
+                new Thread(new LooperTask()).start();
+
+                for (SingleTask singleTask : tasks) {
+                    singleTask.execute();
+                }
+
+                looperHandler.sendEmptyMessage(1);
             }
         });
 
@@ -128,33 +127,64 @@ public class MainActivity extends AppCompatActivity implements SingleTask.Callba
         });
     }
 
+    class LooperTask implements Runnable {
+
+        @SuppressLint("HandlerLeak")
+        @Override
+        public void run() {
+            Looper.prepare();
+
+            looperHandler = new Handler() {
+                @Override
+                public void handleMessage(Message msg) {
+                    switch (msg.what) {
+                        case 1:
+                            SingleTask peek = taskQueue.poll();
+                            if (peek != null) {
+                                lastPollTime = System.currentTimeMillis();
+                                peek.queryList();
+                            }
+                            timeDelta = 500 - (System.currentTimeMillis() - lastPollTime);
+                            if (timeDelta <= 0) {
+                                looperHandler.sendEmptyMessage(1);
+                            } else {
+                                looperHandler.sendEmptyMessageDelayed(1, timeDelta);
+                            }
+                            break;
+                        case 2:
+                            taskQueue.offer((SingleTask) msg.obj);
+                            break;
+                    }
+                }
+            };
+            Looper.loop();
+        }
+    }
+
+    private Message getTaskMessage(SingleTask singleTask) {
+        Message msg = Message.obtain();
+        msg.what = 2;
+        msg.obj = singleTask;
+        return msg;
+    }
+
     @Override
     public void onReady(SingleTask singleTask) {
-        printThread("onReady");
-        queue.offer(singleTask);
+        looperHandler.sendMessage(getTaskMessage(singleTask));
     }
 
     @Override
     public void onDoneQuery(final SingleTask singleTask, long lastQueryTime) {
         if (lastQueryTime == 0) {
-            printThread("onDoneQuery 1");
-            queue.offer(singleTask);
+            looperHandler.sendMessage(getTaskMessage(singleTask));
         } else {
             long delta = 5000 - (System.currentTimeMillis() - lastQueryTime);
             if (delta <= 0) {
-                printThread("onDoneQuery 2");
-                queue.offer(singleTask);
+                looperHandler.sendMessage(getTaskMessage(singleTask));
             } else {
-                handler.postDelayed(new Runnable() {
-                    @Override
-                    public void run() {
-                        printThread("onDoneQuery 3");
-                        queue.offer(singleTask);
-                    }
-                }, delta);
+                looperHandler.sendMessageDelayed(getTaskMessage(singleTask), delta);
             }
         }
-
     }
 
     @Override
